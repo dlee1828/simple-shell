@@ -152,7 +152,7 @@ void handle_piped_commands(char** left_argv, char** right_argv) {
         // Parent
         current_foreground_process = pid_1;
         int status;
-        waitpid(pid_1, &status, 0);
+        waitpid(pid_1, &status, WUNTRACED);
         current_foreground_process = -1;
     }
 }
