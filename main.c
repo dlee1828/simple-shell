@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,7 +7,7 @@
 #include <unistd.h>
 
 // Define DEBUG mode
-#define DEBUG 1
+#define DEBUG 0
 
 // Debug print macro
 #if DEBUG
@@ -16,6 +17,8 @@
 #endif
 
 int PERMISSIONS = S_IRUSR | S_IWUSR | S_IXUSR;
+
+pid_t current_foreground_process = -1;
 
 void execute_command(char** argv) {
     debug_print("Executing command with arguments:\n");
@@ -56,7 +59,11 @@ void execute_command(char** argv) {
     if (input_file_name != NULL) {
         debug_print("Setting input file\n");
         int input_file_descriptor = open(input_file_name, O_RDONLY);
-        int d = dup2(input_file_descriptor, STDIN_FILENO);
+        if (input_file_descriptor < 0) {
+            printf("Input file does not exist.\n");
+            return;
+        }
+        dup2(input_file_descriptor, STDIN_FILENO);
         close(input_file_descriptor);
     }
     if (error_file_name != NULL) {
@@ -78,11 +85,19 @@ void handle_single_command(char** argv) {
         printf("Fork failed\n");
         exit(EXIT_FAILURE);
     } else if (pid == 0) {
+        signal(SIGINT, SIG_DFL);   // Reset handler to default
+        signal(SIGTSTP, SIG_DFL);  // Reset handler to default
         execute_command(argv);
     } else {
-        // This block will be executed by the parent process
+        // Set the child as the current foreground process
+        current_foreground_process = pid;
         int status;
-        waitpid(pid, &status, 0);  // Wait for the child to terminate
+
+        waitpid(pid, &status, WUNTRACED);  // WUNTRACED allows waitpid to
+        current_foreground_process = -1;
+
+        // waitpid(pid, &status, 0);  // Wait for the child to terminate
+        // current_foreground_process = -1;
     }
 }
 
@@ -102,6 +117,9 @@ void handle_piped_commands(char** left_argv, char** right_argv) {
     } else if (pid_1 == 0) {
         // Child
         // We then want to fork again to execute both processes
+        signal(SIGINT, SIG_DFL);   // Reset handler to default
+        signal(SIGTSTP, SIG_DFL);  // Reset handler to default
+
         int pipe_fd[2];
         if (pipe(pipe_fd) < 0) {
             perror("Pipe failed");
@@ -123,9 +141,7 @@ void handle_piped_commands(char** left_argv, char** right_argv) {
             // debug_print("Reached end of left command\n");
         } else {
             // Parent - Right command
-            // We want to wait for the child to finish
             debug_print("Entered process for right command\n");
-            debug_print("Started process for right command\n");
 
             close(pipe_fd[1]);
             dup2(pipe_fd[0], STDIN_FILENO);
@@ -134,8 +150,10 @@ void handle_piped_commands(char** left_argv, char** right_argv) {
         }
     } else {
         // Parent
+        current_foreground_process = pid_1;
         int status;
         waitpid(pid_1, &status, 0);
+        current_foreground_process = -1;
     }
 }
 
@@ -172,10 +190,30 @@ void handle_command_line(char** tokens) {
         handle_single_command(left_argv);
 }
 
+void handle_sigint() {
+    debug_print("   SIGINT\n");
+    if (current_foreground_process >= 0) {
+        kill(current_foreground_process, SIGINT);
+        printf("\n");
+    }
+}
+
+void handle_sigtstp() {
+    debug_print("   SIGTSTP\n");
+    if (current_foreground_process >= 0) {
+        kill(current_foreground_process, SIGTSTP);
+        printf("\n");
+    }
+}
+
 int main() {
     char* tokens[100];
     char* line = NULL;
     size_t size = 0;
+
+    signal(SIGINT, handle_sigint);
+    signal(SIGTSTP, handle_sigtstp);
+
     while (true) {
         printf("# ");
         getline(&line, &size, stdin);
@@ -193,6 +231,8 @@ int main() {
         }
         tokens[tokens_index] = NULL;
 
+        if (tokens[0] != NULL && strcmp(tokens[0], "q") == 0)
+            return EXIT_SUCCESS;
         handle_command_line(tokens);
     }
 }

@@ -1,12 +1,10 @@
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 int main() {
-    // char* argv[] = {"ls", "-l", NULL};
-    char* argv[] = {"grep", "\"a\"", "file.txt", NULL};
-    if (execvp(argv[0], argv) == -1) {
-        perror("execvp");
-        return 1;
-    }
+    char* s = NULL;
+    int x = strcmp(s, "hii");
+    printf("%d\n", x);
     return 0;
 }
