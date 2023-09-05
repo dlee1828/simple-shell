@@ -20,6 +20,65 @@ int PERMISSIONS = S_IRUSR | S_IWUSR | S_IXUSR;
 
 pid_t current_foreground_process = -1;
 
+struct Job {
+    pid_t pid;
+    bool is_running;
+    char* command;
+};
+
+struct Job jobs[20];
+
+void initialize_jobs_array() {
+    for (int i = 0; i < 20; i++) {
+        struct Job job = {
+            .is_running = false,
+            .pid = -1,  // pid of -1 signifies an empty array element
+            .command = NULL,
+        };
+        jobs[i] = job;
+    }
+}
+
+void add_job(struct Job job) {
+    for (int i = 0; i < 20; i++) {
+        if (jobs[i].pid < 0) {
+            jobs[i] = job;
+            return;
+        }
+    }
+    printf("Jobs array is at maximum capacity\n");
+}
+
+char* create_command_string(char** argv) {
+    int totalLength = 0;
+    for (int i = 0; argv[i] != NULL; i++) {
+        totalLength += strlen(argv[i]);
+    }
+
+    char* result = (char*)malloc(totalLength + 1);
+    if (!result) {
+        perror("Failed to allocate memory");
+        exit(EXIT_FAILURE);
+    }
+    result[0] = '\0';
+
+    for (int i = 0; argv[i] != NULL; i++) {
+        strcat(result, argv[i]);
+        if (argv[i + 1] != NULL) {
+            strcat(result, " ");
+        }
+    }
+
+    return result;
+}
+
+void print_jobs() {
+    for (int i = 0; i < 20 && jobs[i].pid >= 0; i++) {
+        printf("[%d] %s %s       %s\n", i + 1, "+",
+               jobs[i].is_running ? "Running" : "Stopped", jobs[i].command);
+    }
+}
+
 void execute_command(char** argv) {
     debug_print("Executing command with arguments:\n");
     for (int j = 0; argv[j] != NULL; j++) {
@@ -76,32 +135,8 @@ void execute_command(char** argv) {
     execvp(argv[0], argv);
 }
 
-void handle_single_command(char** argv) {
-    debug_print("Entered function handle_single_command\n");
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        // error
-        printf("Fork failed\n");
-        exit(EXIT_FAILURE);
-    } else if (pid == 0) {
-        signal(SIGINT, SIG_DFL);   // Reset handler to default
-        signal(SIGTSTP, SIG_DFL);  // Reset handler to default
-        execute_command(argv);
-    } else {
-        // Set the child as the current foreground process
-        current_foreground_process = pid;
-        int status;
-
-        waitpid(pid, &status, WUNTRACED);  // WUNTRACED allows waitpid to
-        current_foreground_process = -1;
-
-        // waitpid(pid, &status, 0);  // Wait for the child to terminate
-        // current_foreground_process = -1;
-    }
-}
-
-void handle_piped_commands(char** left_argv, char** right_argv) {
+void handle_piped_commands(char** left_argv, char** right_argv,
+                           bool is_background) {
     debug_print("Entered handle_piped_commands\n");
     debug_print("Left command: %s, right command: %s\n", left_argv[0],
                 right_argv[0]);
@@ -157,8 +192,50 @@ void handle_piped_commands(char** left_argv, char** right_argv) {
     }
 }
 
+void handle_single_command(char** argv, bool is_background) {
+    debug_print("Entered function handle_single_command\n");
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        // error
+        printf("Fork failed\n");
+        exit(EXIT_FAILURE);
+    } else if (pid == 0) {
+        signal(SIGINT, SIG_DFL);   // Reset handler to default
+        signal(SIGTSTP, SIG_DFL);  // Reset handler to default
+        execute_command(argv);
+    } else {
+        // Set the child as the current foreground process
+        current_foreground_process = pid;
+        int status;
+
+        // If it's a bg process, add it to the jobs list
+        // Otherwise, wait
+        if (is_background) {
+            struct Job job = {.is_running = true,
+                              .pid = pid,
+                              .command = create_command_string(argv)};
+            add_job(job);
+        } else
+            waitpid(pid, &status, WUNTRACED);
+        current_foreground_process = -1;
+    }
+}
+
 void handle_command_line(char** tokens) {
     debug_print("Entered function handle_command_line\n");
+
+    // Check if it's a background process
+    bool is_background = false;
+    int i = 0;
+    while (tokens[i] != NULL) {
+        if (strcmp(tokens[i], "&") == 0 && tokens[i + 1] == NULL) {
+            is_background = true;
+            tokens[i] = NULL;
+            break;
+        }
+        i++;
+    }
 
     // Find a pipe
     char* left_argv[100];
@@ -167,7 +244,7 @@ void handle_command_line(char** tokens) {
 
     int left_i = 0;
     int right_i = 0;
-    int i = 0;
+    i = 0;
     while (tokens[i] != NULL) {
         if (strcmp(tokens[i], "|") == 0) {
             has_pipe = true;
@@ -185,9 +262,9 @@ void handle_command_line(char** tokens) {
     right_argv[right_i] = NULL;
 
     if (has_pipe)
-        handle_piped_commands(left_argv, right_argv);
+        handle_piped_commands(left_argv, right_argv, is_background);
     else
-        handle_single_command(left_argv);
+        handle_single_command(left_argv, is_background);
 }
 
 void handle_sigint() {
@@ -214,6 +291,8 @@ int main() {
     signal(SIGINT, handle_sigint);
     signal(SIGTSTP, handle_sigtstp);
 
+    initialize_jobs_array();
+
     while (true) {
         printf("# ");
         getline(&line, &size, stdin);
@@ -233,6 +312,10 @@ int main() {
 
         if (tokens[0] != NULL && strcmp(tokens[0], "q") == 0)
             return EXIT_SUCCESS;
-        handle_command_line(tokens);
+        else if (tokens[0] != NULL && strcmp(tokens[0], "jobs") == 0 &&
+                 tokens[1] == NULL) {
+            print_jobs();
+        } else
+            handle_command_line(tokens);
     }
 }
