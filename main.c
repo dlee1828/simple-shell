@@ -16,27 +16,82 @@
 #define debug_print(...) /* nothing */
 #endif
 
+#define BUFFER_SIZE 100
+
 int PERMISSIONS = S_IRUSR | S_IWUSR | S_IXUSR;
+
+void free_argv(char** argv) {
+    debug_print("Freeing argv\n");
+
+    if (argv == NULL) return;
+
+    int len = 0;
+    int i = 0;
+    while (argv[i] != NULL) {
+        i++;
+        len++;
+    }
+
+    for (i = 0; i < len; i++) free(argv[i]);
+
+    free(argv);
+    debug_print("Finished freeing argv\n");
+}
+
+// Make copy that is stored in dynamic memory
+char** make_copy_of_argv(char** argv) {
+    debug_print("Making copy of argv\n");
+    int len = 0;
+    int i = 0;
+    while (argv[i] != NULL) {
+        len++;
+        i++;
+    }
+
+    if (len == 0) return NULL;
+
+    char** copy = (char**)malloc((len + 1) * sizeof(char*));
+    for (i = 0; i < len; i++) {
+        copy[i] = malloc(strlen(argv[i]) + 1);
+        strcpy(copy[i], argv[i]);
+    }
+
+    copy[len] = NULL;
+
+    debug_print("Finished making copy of argv\n");
+    return copy;
+}
 
 struct CurrentForegroundProcess {
     pid_t pid;
     char** argv;
 } current_fg_process;
 
+void initialize_current_fg_process() {
+    current_fg_process.pid = -1;
+    current_fg_process.argv = NULL;
+}
+
 void reset_current_fg_process() {
+    debug_print("Resetting current fg process\n");
+    free_argv(current_fg_process.argv);
     current_fg_process.argv = NULL;
     current_fg_process.pid = -1;
+    debug_print("Finished resetting current fg process\n");
 }
 
 void set_current_fg_process(pid_t pid, char** argv) {
+    debug_print("Setting current fg process\n");
+    reset_current_fg_process();
     current_fg_process.pid = pid;
-    current_fg_process.argv = argv;
+    current_fg_process.argv = make_copy_of_argv(argv);
+    debug_print("Finished setting current fg process\n");
 }
 
 struct Job {
     pid_t pid;
     bool is_running;
-    char* command;
+    char** argv;
 };
 
 struct Job jobs[20];
@@ -46,15 +101,21 @@ void initialize_jobs_array() {
         struct Job job = {
             .is_running = false,
             .pid = -1,  // pid of -1 signifies an empty array element
-            .command = NULL,
+            .argv = NULL,
         };
         jobs[i] = job;
     }
 }
 
+void store_argv_dynamically(struct Job* job) {
+    job->argv = make_copy_of_argv(job->argv);
+}
+
 void add_job(struct Job job) {
+    debug_print("Adding job\n");
     for (int i = 0; i < 20; i++) {
         if (jobs[i].pid < 0) {
+            store_argv_dynamically(&job);
             jobs[i] = job;
             return;
         }
@@ -62,15 +123,23 @@ void add_job(struct Job job) {
     printf("Jobs array is at maximum capacity\n");
 }
 
+void free_job(struct Job* job) { free_argv(job->argv); }
+
 void remove_job(pid_t pid) {
     int i = 0;
+    struct Job* removed_job = NULL;
+
     while (i < 20) {
         if (jobs[i].pid == pid) {
             jobs[i].pid = -1;
+            removed_job = &jobs[i];
             break;
         }
         i++;
     }
+
+    // Free the memory for that job
+    free_job(removed_job);
 
     // Shift all subsequent jobs left
     i++;
@@ -107,6 +176,7 @@ char* create_command_string(char** argv) {
     int totalLength = 0;
     for (int i = 0; argv[i] != NULL; i++) {
         totalLength += strlen(argv[i]);
+        if (argv[i + 1] != NULL) totalLength++;  // for spaces
     }
 
     char* result = (char*)malloc(totalLength + 1);
@@ -131,9 +201,10 @@ void print_jobs() {
         int job_num = i + 1;
         char* recency = (i == 20 || jobs[i + 1].pid < 0) ? "+" : "-";
         char* status = jobs[i].is_running ? "Running" : "Stopped";
-        char* command = jobs[i].command;
-
-        printf("[%d] %s %s       %s\n", job_num, recency, status, command);
+        char* command_string = create_command_string(jobs[i].argv);
+        printf("[%d] %s %s       %s\n", job_num, recency, status,
+               command_string);
+        free(command_string);
     }
 }
 
@@ -152,10 +223,12 @@ void check_for_done_jobs() {
                 int job_num = i + 1;
                 char* recency = (i == 20 || jobs[i + 1].pid < 0) ? "+" : "-";
                 char* status = "Done";
-                char* command = jobs[i].command;
+                char* command_string = create_command_string(jobs[i].argv);
 
                 printf("[%d] %s %s       %s\n", job_num, recency, status,
-                       command);
+                       command_string);
+
+                free(command_string);
 
                 // Add pid to the to_remove array
                 for (int j = 0; j < 20; j++) {
@@ -166,11 +239,10 @@ void check_for_done_jobs() {
                 }
             }
         }
-
-        // Remove all the processes in to_remove
-        for (int i = 0; i < 20; i++) {
-            if (to_remove[i] != -1) remove_job(to_remove[i]);
-        }
+    }
+    // Remove all the processes in to_remove
+    for (int i = 0; i < 20; i++) {
+        if (to_remove[i] != -1) remove_job(to_remove[i]);
     }
 }
 
@@ -280,16 +352,19 @@ void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
         }
     } else {
         // Parent
-        set_current_fg_process(pid_1, argv);
-        int status;
         if (is_background) {
-            struct Job job = {.is_running = true,
-                              .pid = pid_1,
-                              .command = create_command_string(argv)};
+            struct Job job = {
+                .is_running = true,
+                .pid = pid_1,
+                .argv = argv,
+            };
             add_job(job);
-        } else
+        } else {
+            set_current_fg_process(pid_1, argv);
+            int status;
             waitpid(pid_1, &status, WUNTRACED);
-        reset_current_fg_process();
+            reset_current_fg_process();
+        }
     }
 }
 
@@ -306,20 +381,18 @@ void handle_single_command(char** argv, bool is_background) {
         signal(SIGTSTP, SIG_DFL);  // Reset handler to default
         execute_command(argv);
     } else {
-        // Set the child as the current foreground process
-        set_current_fg_process(pid, argv);
-        int status;
-
         // If it's a bg process, add it to the jobs list
         // Otherwise, wait
         if (is_background) {
-            struct Job job = {.is_running = true,
-                              .pid = pid,
-                              .command = create_command_string(argv)};
+            struct Job job = {.is_running = true, .pid = pid, .argv = argv};
             add_job(job);
-        } else
+        } else {
+            // Set the child as the current foreground process
+            set_current_fg_process(pid, argv);
+            int status;
             waitpid(pid, &status, WUNTRACED);
-        reset_current_fg_process();
+            reset_current_fg_process();
+        }
     }
 }
 
@@ -339,8 +412,8 @@ void handle_command_line(char** tokens) {
     }
 
     // Find a pipe
-    char* left_argv[100];
-    char* right_argv[100];
+    char* left_argv[BUFFER_SIZE];
+    char* right_argv[BUFFER_SIZE];
     bool has_pipe = false;
 
     int left_i = 0;
@@ -380,14 +453,18 @@ void handle_sigtstp() {
     debug_print("   SIGTSTP\n");
     if (current_fg_process.pid >= 0) {
         kill(current_fg_process.pid, SIGTSTP);
+        debug_print("Stopped process\n");
 
         // Add to jobs list
         struct Job job = {
-            .command = create_command_string(current_fg_process.argv),
+            .argv = current_fg_process.argv,
             .is_running = false,
             .pid = current_fg_process.pid,
         };
+        debug_print("Calling add_job from sigtstp handler\n");
         add_job(job);
+
+        reset_current_fg_process();
 
         printf("\n");
     }
@@ -399,9 +476,14 @@ void handle_fg() {
     if (pid < 0)
         printf("There are no jobs to bring to the foreground.\n");
     else {
-        printf("%s\n", most_recent_job->command);
+        char* command_string = create_command_string(most_recent_job->argv);
+        printf("%s\n", command_string);
+        free(command_string);
         kill(pid, SIGCONT);
 
+        set_current_fg_process(pid, most_recent_job->argv);
+
+        remove_job(pid);
         int status;
         waitpid(pid, &status, WUNTRACED);
     }
@@ -413,14 +495,17 @@ void handle_bg() {
     if (pid < 0)
         printf("There are no stopped jobs to run.\n");
     else {
-        printf("%s\n", most_recent_stopped_job->command);
+        char* command_string =
+            create_command_string(most_recent_stopped_job->argv);
+        printf("%s\n", command_string);
+        free(command_string);
         most_recent_stopped_job->is_running = true;
         kill(pid, SIGCONT);
     }
 }
 
 int main() {
-    char* tokens[100];
+    char* tokens[BUFFER_SIZE];
     char* line = NULL;
     size_t size = 0;
 
@@ -428,6 +513,7 @@ int main() {
     signal(SIGTSTP, handle_sigtstp);
 
     initialize_jobs_array();
+    initialize_current_fg_process();
 
     while (true) {
         printf("# ");
