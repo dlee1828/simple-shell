@@ -18,7 +18,20 @@
 
 int PERMISSIONS = S_IRUSR | S_IWUSR | S_IXUSR;
 
-pid_t current_foreground_process = -1;
+struct CurrentForegroundProcess {
+    pid_t pid;
+    char** argv;
+} current_fg_process;
+
+void reset_current_fg_process() {
+    current_fg_process.argv = NULL;
+    current_fg_process.pid = -1;
+}
+
+void set_current_fg_process(pid_t pid, char** argv) {
+    current_fg_process.pid = pid;
+    current_fg_process.argv = argv;
+}
 
 struct Job {
     pid_t pid;
@@ -74,8 +87,12 @@ char* create_command_string(char** argv) {
 
 void print_jobs() {
     for (int i = 0; i < 20 && jobs[i].pid >= 0; i++) {
-        printf("[%d] %s %s       %s\n", i + 1, "+",
-               jobs[i].is_running ? "Running" : "Stopped", jobs[i].command);
+        int job_num = i + 1;
+        char* recency = (i == 20 || jobs[i + 1].pid < 0) ? "+" : "-";
+        char* status = jobs[i].is_running ? "Running" : "Stopped";
+        char* command = jobs[i].command;
+
+        printf("[%d] %s %s       %s\n", job_num, recency, status, command);
     }
 }
 
@@ -135,7 +152,7 @@ void execute_command(char** argv) {
     execvp(argv[0], argv);
 }
 
-void handle_piped_commands(char** left_argv, char** right_argv,
+void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
                            bool is_background) {
     debug_print("Entered handle_piped_commands\n");
     debug_print("Left command: %s, right command: %s\n", left_argv[0],
@@ -185,10 +202,16 @@ void handle_piped_commands(char** left_argv, char** right_argv,
         }
     } else {
         // Parent
-        current_foreground_process = pid_1;
+        set_current_fg_process(pid_1, argv);
         int status;
-        waitpid(pid_1, &status, WUNTRACED);
-        current_foreground_process = -1;
+        if (is_background) {
+            struct Job job = {.is_running = true,
+                              .pid = pid_1,
+                              .command = create_command_string(argv)};
+            add_job(job);
+        } else
+            waitpid(pid_1, &status, WUNTRACED);
+        reset_current_fg_process();
     }
 }
 
@@ -206,7 +229,7 @@ void handle_single_command(char** argv, bool is_background) {
         execute_command(argv);
     } else {
         // Set the child as the current foreground process
-        current_foreground_process = pid;
+        set_current_fg_process(pid, argv);
         int status;
 
         // If it's a bg process, add it to the jobs list
@@ -218,7 +241,7 @@ void handle_single_command(char** argv, bool is_background) {
             add_job(job);
         } else
             waitpid(pid, &status, WUNTRACED);
-        current_foreground_process = -1;
+        reset_current_fg_process();
     }
 }
 
@@ -262,23 +285,32 @@ void handle_command_line(char** tokens) {
     right_argv[right_i] = NULL;
 
     if (has_pipe)
-        handle_piped_commands(left_argv, right_argv, is_background);
+        handle_piped_commands(left_argv, right_argv, tokens, is_background);
     else
         handle_single_command(left_argv, is_background);
 }
 
 void handle_sigint() {
     debug_print("   SIGINT\n");
-    if (current_foreground_process >= 0) {
-        kill(current_foreground_process, SIGINT);
+    if (current_fg_process.pid >= 0) {
+        kill(current_fg_process.pid, SIGINT);
         printf("\n");
     }
 }
 
 void handle_sigtstp() {
     debug_print("   SIGTSTP\n");
-    if (current_foreground_process >= 0) {
-        kill(current_foreground_process, SIGTSTP);
+    if (current_fg_process.pid >= 0) {
+        kill(current_fg_process.pid, SIGTSTP);
+
+        // Add to jobs list
+        struct Job job = {
+            .command = create_command_string(current_fg_process.argv),
+            .is_running = false,
+            .pid = current_fg_process.pid,
+        };
+        add_job(job);
+
         printf("\n");
     }
 }
