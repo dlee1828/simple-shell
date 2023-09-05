@@ -62,6 +62,47 @@ void add_job(struct Job job) {
     printf("Jobs array is at maximum capacity\n");
 }
 
+void remove_job(pid_t pid) {
+    int i = 0;
+    while (i < 20) {
+        if (jobs[i].pid == pid) {
+            jobs[i].pid = -1;
+            break;
+        }
+        i++;
+    }
+
+    // Shift all subsequent jobs left
+    i++;
+    while (i < 20) {
+        if (jobs[i].pid >= 0) {
+            jobs[i - 1] = jobs[i];
+            jobs[i].pid = -1;
+        }
+        i++;
+    }
+}
+
+struct Job* get_most_recent_job() {
+    for (int i = 19; i >= 0; i--) {
+        if (jobs[i].pid > 0) {
+            return &jobs[i];
+        }
+    }
+
+    return &jobs[0];
+}
+
+struct Job* get_most_recent_stopped_job() {
+    for (int i = 19; i >= 0; i--) {
+        if (jobs[i].pid > 0 && jobs[i].is_running == false) {
+            return &jobs[i];
+        }
+    }
+
+    return &jobs[0];
+}
+
 char* create_command_string(char** argv) {
     int totalLength = 0;
     for (int i = 0; argv[i] != NULL; i++) {
@@ -93,6 +134,43 @@ void print_jobs() {
         char* command = jobs[i].command;
 
         printf("[%d] %s %s       %s\n", job_num, recency, status, command);
+    }
+}
+
+void check_for_done_jobs() {
+    int status;
+    pid_t to_remove[20];
+    for (int i = 0; i < 20; i++) {
+        to_remove[i] = -1;
+    }
+
+    for (int i = 0; i < 20; i++) {
+        if (jobs[i].pid >= 0) {
+            pid_t result = waitpid(jobs[i].pid, &status, WNOHANG);
+            if (result == jobs[i].pid) {
+                // Job has completed
+                int job_num = i + 1;
+                char* recency = (i == 20 || jobs[i + 1].pid < 0) ? "+" : "-";
+                char* status = "Done";
+                char* command = jobs[i].command;
+
+                printf("[%d] %s %s       %s\n", job_num, recency, status,
+                       command);
+
+                // Add pid to the to_remove array
+                for (int j = 0; j < 20; j++) {
+                    if (to_remove[j] == -1) {
+                        to_remove[j] = jobs[i].pid;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Remove all the processes in to_remove
+        for (int i = 0; i < 20; i++) {
+            if (to_remove[i] != -1) remove_job(to_remove[i]);
+        }
     }
 }
 
@@ -315,6 +393,32 @@ void handle_sigtstp() {
     }
 }
 
+void handle_fg() {
+    struct Job* most_recent_job = get_most_recent_job();
+    int pid = most_recent_job->pid;
+    if (pid < 0)
+        printf("There are no jobs to bring to the foreground.\n");
+    else {
+        printf("%s\n", most_recent_job->command);
+        kill(pid, SIGCONT);
+
+        int status;
+        waitpid(pid, &status, WUNTRACED);
+    }
+}
+
+void handle_bg() {
+    struct Job* most_recent_stopped_job = get_most_recent_stopped_job();
+    int pid = most_recent_stopped_job->pid;
+    if (pid < 0)
+        printf("There are no stopped jobs to run.\n");
+    else {
+        printf("%s\n", most_recent_stopped_job->command);
+        most_recent_stopped_job->is_running = true;
+        kill(pid, SIGCONT);
+    }
+}
+
 int main() {
     char* tokens[100];
     char* line = NULL;
@@ -328,6 +432,9 @@ int main() {
     while (true) {
         printf("# ");
         getline(&line, &size, stdin);
+
+        check_for_done_jobs();
+
         size_t len = strlen(line);
         if (len > 0 && line[len - 1] == '\n') {
             line[len - 1] = '\0';
@@ -342,12 +449,22 @@ int main() {
         }
         tokens[tokens_index] = NULL;
 
-        if (tokens[0] != NULL && strcmp(tokens[0], "q") == 0)
-            return EXIT_SUCCESS;
-        else if (tokens[0] != NULL && strcmp(tokens[0], "jobs") == 0 &&
-                 tokens[1] == NULL) {
-            print_jobs();
-        } else
-            handle_command_line(tokens);
+        // Handle special commands
+        if (tokens[0] != NULL && tokens[1] == NULL) {
+            if (strcmp(tokens[0], "q") == 0)
+                return EXIT_SUCCESS;
+            else if (strcmp(tokens[0], "jobs") == 0) {
+                print_jobs();
+                continue;
+            } else if (strcmp(tokens[0], "fg") == 0) {
+                handle_fg();
+                continue;
+            } else if (strcmp(tokens[0], "bg") == 0) {
+                handle_bg();
+                continue;
+            }
+        }
+
+        handle_command_line(tokens);
     }
 }
