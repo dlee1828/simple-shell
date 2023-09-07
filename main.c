@@ -16,13 +16,11 @@
 #define debug_print(...) /* nothing */
 #endif
 
-#define BUFFER_SIZE 100
+#define BUFFER_SIZE 2000
 
 int PERMISSIONS = S_IRUSR | S_IWUSR | S_IXUSR;
 
 void free_argv(char** argv) {
-    debug_print("Freeing argv\n");
-
     if (argv == NULL) return;
 
     int len = 0;
@@ -35,12 +33,10 @@ void free_argv(char** argv) {
     for (i = 0; i < len; i++) free(argv[i]);
 
     free(argv);
-    debug_print("Finished freeing argv\n");
 }
 
 // Make copy that is stored in dynamic memory
 char** make_copy_of_argv(char** argv) {
-    debug_print("Making copy of argv\n");
     int len = 0;
     int i = 0;
     while (argv[i] != NULL) {
@@ -58,7 +54,6 @@ char** make_copy_of_argv(char** argv) {
 
     copy[len] = NULL;
 
-    debug_print("Finished making copy of argv\n");
     return copy;
 }
 
@@ -73,19 +68,15 @@ void initialize_current_fg_process() {
 }
 
 void reset_current_fg_process() {
-    debug_print("Resetting current fg process\n");
     free_argv(current_fg_process.argv);
     current_fg_process.argv = NULL;
     current_fg_process.pid = -1;
-    debug_print("Finished resetting current fg process\n");
 }
 
 void set_current_fg_process(pid_t pid, char** argv) {
-    debug_print("Setting current fg process\n");
     reset_current_fg_process();
     current_fg_process.pid = pid;
     current_fg_process.argv = make_copy_of_argv(argv);
-    debug_print("Finished setting current fg process\n");
 }
 
 struct Job {
@@ -112,7 +103,6 @@ void store_argv_dynamically(struct Job* job) {
 }
 
 void add_job(struct Job job) {
-    debug_print("Adding job\n");
     for (int i = 0; i < 20; i++) {
         if (jobs[i].pid < 0) {
             store_argv_dynamically(&job);
@@ -247,12 +237,6 @@ void check_for_done_jobs() {
 }
 
 void execute_command(char** argv) {
-    debug_print("Executing command with arguments:\n");
-    for (int j = 0; argv[j] != NULL; j++) {
-        debug_print("%s\n", argv[j]);
-    }
-    debug_print("---\n");
-
     char* output_file_name = NULL;
     char* input_file_name = NULL;
     char* error_file_name = NULL;
@@ -276,14 +260,12 @@ void execute_command(char** argv) {
     }
 
     if (output_file_name != NULL) {
-        debug_print("Setting output file\n");
         int output_file_descriptor =
             open(output_file_name, O_CREAT | O_WRONLY, PERMISSIONS);
         dup2(output_file_descriptor, STDOUT_FILENO);
         close(output_file_descriptor);
     }
     if (input_file_name != NULL) {
-        debug_print("Setting input file\n");
         int input_file_descriptor = open(input_file_name, O_RDONLY);
         if (input_file_descriptor < 0) {
             printf("Input file does not exist.\n");
@@ -293,7 +275,6 @@ void execute_command(char** argv) {
         close(input_file_descriptor);
     }
     if (error_file_name != NULL) {
-        debug_print("Setting error file\n");
         int error_file_descriptor =
             open(error_file_name, O_CREAT | O_WRONLY, PERMISSIONS);
         dup2(error_file_descriptor, STDERR_FILENO);
@@ -304,10 +285,6 @@ void execute_command(char** argv) {
 
 void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
                            bool is_background) {
-    debug_print("Entered handle_piped_commands\n");
-    debug_print("Left command: %s, right command: %s\n", left_argv[0],
-                right_argv[0]);
-
     // Set stdout of left to pipe_fd[1]
     // Set stdin of right pipe to pipe_fd[0]
 
@@ -334,17 +311,12 @@ void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
             exit(EXIT_FAILURE);
         } else if (pid_2 == 0) {
             // Child - Left command
-            debug_print("Entered process for left command\n");
-
             close(pipe_fd[0]);
             dup2(pipe_fd[1], STDOUT_FILENO);
             close(pipe_fd[1]);
             execute_command(left_argv);
-            // debug_print("Reached end of left command\n");
         } else {
             // Parent - Right command
-            debug_print("Entered process for right command\n");
-
             close(pipe_fd[1]);
             dup2(pipe_fd[0], STDIN_FILENO);
             close(pipe_fd[0]);
@@ -369,7 +341,6 @@ void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
 }
 
 void handle_single_command(char** argv, bool is_background) {
-    debug_print("Entered function handle_single_command\n");
     pid_t pid = fork();
 
     if (pid < 0) {
@@ -397,8 +368,6 @@ void handle_single_command(char** argv, bool is_background) {
 }
 
 void handle_command_line(char** tokens) {
-    debug_print("Entered function handle_command_line\n");
-
     // Check if it's a background process
     bool is_background = false;
     int i = 0;
@@ -442,7 +411,6 @@ void handle_command_line(char** tokens) {
 }
 
 void handle_sigint() {
-    debug_print("   SIGINT\n");
     if (current_fg_process.pid >= 0) {
         kill(current_fg_process.pid, SIGINT);
         printf("\n");
@@ -450,10 +418,8 @@ void handle_sigint() {
 }
 
 void handle_sigtstp() {
-    debug_print("   SIGTSTP\n");
     if (current_fg_process.pid >= 0) {
         kill(current_fg_process.pid, SIGTSTP);
-        debug_print("Stopped process\n");
 
         // Add to jobs list
         struct Job job = {
@@ -461,7 +427,6 @@ void handle_sigtstp() {
             .is_running = false,
             .pid = current_fg_process.pid,
         };
-        debug_print("Calling add_job from sigtstp handler\n");
         add_job(job);
 
         reset_current_fg_process();
@@ -517,7 +482,11 @@ int main() {
 
     while (true) {
         printf("# ");
-        getline(&line, &size, stdin);
+        ssize_t read = getline(&line, &size, stdin);
+        if (read == -1) {
+            printf("\n");
+            break;
+        }
 
         check_for_done_jobs();
 
@@ -537,9 +506,7 @@ int main() {
 
         // Handle special commands
         if (tokens[0] != NULL && tokens[1] == NULL) {
-            if (strcmp(tokens[0], "q") == 0)
-                return EXIT_SUCCESS;
-            else if (strcmp(tokens[0], "jobs") == 0) {
+            if (strcmp(tokens[0], "jobs") == 0) {
                 print_jobs();
                 continue;
             } else if (strcmp(tokens[0], "fg") == 0) {
