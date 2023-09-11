@@ -1,9 +1,0 @@
-Makefile
-bruh.txt
-errors.txt
-input.txt
-main.c
-output.txt
-program
-test
-test.c

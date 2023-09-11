@@ -299,6 +299,8 @@ void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
         signal(SIGINT, SIG_DFL);   // Reset handler to default
         signal(SIGTSTP, SIG_DFL);  // Reset handler to default
 
+        setpgid(0, 0);
+
         int pipe_fd[2];
         if (pipe(pipe_fd) < 0) {
             perror("Pipe failed");
@@ -320,6 +322,10 @@ void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
             close(pipe_fd[1]);
             dup2(pipe_fd[0], STDIN_FILENO);
             close(pipe_fd[0]);
+
+            int status;
+            waitpid(pid_2, &status, WUNTRACED);
+
             execute_command(right_argv);
         }
     } else {

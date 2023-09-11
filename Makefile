@@ -8,7 +8,7 @@ CFLAGS = -Wall
 SOURCES = main.c
 
 # Define the output executable
-OUTPUT = program
+OUTPUT = yash
 
 # The default target that 'make' will execute if no targets are specified
 all: $(OUTPUT)
