@@ -5,7 +5,7 @@ CC = gcc
 CFLAGS = -Wall
 
 # Define the source files
-SOURCES = main.c
+SOURCES = yash.c
 
 # Define the output executable
 OUTPUT = yash
