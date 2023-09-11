@@ -340,7 +340,9 @@ void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
         } else {
             set_current_fg_process(pid_1, argv);
             int status;
+            tcsetpgrp(STDIN_FILENO, pid_1);
             waitpid(pid_1, &status, WUNTRACED);
+            tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
             reset_current_fg_process();
         }
     }
@@ -354,6 +356,7 @@ void handle_single_command(char** argv, bool is_background) {
         printf("Fork failed\n");
         exit(EXIT_FAILURE);
     } else if (pid == 0) {
+        setpgid(0, 0);
         signal(SIGINT, SIG_DFL);   // Reset handler to default
         signal(SIGTSTP, SIG_DFL);  // Reset handler to default
         execute_command(argv);
@@ -367,7 +370,9 @@ void handle_single_command(char** argv, bool is_background) {
             // Set the child as the current foreground process
             set_current_fg_process(pid, argv);
             int status;
+            tcsetpgrp(STDIN_FILENO, pid);
             waitpid(pid, &status, WUNTRACED);
+            tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
             reset_current_fg_process();
         }
     }
@@ -418,14 +423,17 @@ void handle_command_line(char** tokens) {
 
 void handle_sigint() {
     if (current_fg_process.pid >= 0) {
-        kill(current_fg_process.pid, SIGINT);
+        kill(-current_fg_process.pid, SIGINT);
         printf("\n");
     }
 }
 
 void handle_sigtstp() {
     if (current_fg_process.pid >= 0) {
-        kill(current_fg_process.pid, SIGTSTP);
+        int value = kill(-current_fg_process.pid, SIGTSTP);
+        if (value == -1) {
+            perror("kill");
+        }
 
         // Add to jobs list
         struct Job job = {
@@ -450,7 +458,7 @@ void handle_fg() {
         char* command_string = create_command_string(most_recent_job->argv);
         printf("%s\n", command_string);
         free(command_string);
-        kill(pid, SIGCONT);
+        kill(-pid, SIGCONT);
 
         set_current_fg_process(pid, most_recent_job->argv);
 
@@ -471,7 +479,7 @@ void handle_bg() {
         printf("%s\n", command_string);
         free(command_string);
         most_recent_stopped_job->is_running = true;
-        kill(pid, SIGCONT);
+        kill(-pid, SIGCONT);
     }
 }
 
