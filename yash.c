@@ -68,9 +68,11 @@ void initialize_current_fg_process() {
 }
 
 void reset_current_fg_process() {
+    debug_print("entered reset_current_fg_process\n");
     free_argv(current_fg_process.argv);
     current_fg_process.argv = NULL;
     current_fg_process.pid = -1;
+    debug_print("end of reset_current_fg_process\n");
 }
 
 void set_current_fg_process(pid_t pid, char** argv) {
@@ -283,6 +285,28 @@ void execute_command(char** argv) {
     execvp(argv[0], argv);
 }
 
+void handle_sigtstp() {
+    debug_print("ENTERED SIGTSTP HANDLER\n");
+    if (current_fg_process.pid >= 0) {
+        int value = kill(-current_fg_process.pid, SIGTSTP);
+        if (value == -1) {
+            perror("kill");
+        }
+
+        // Add to jobs list
+        struct Job job = {
+            .argv = current_fg_process.argv,
+            .is_running = false,
+            .pid = current_fg_process.pid,
+        };
+        add_job(job);
+
+        reset_current_fg_process();
+
+        printf("\n");
+    }
+}
+
 void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
                            bool is_background) {
     // Set stdout of left to pipe_fd[1]
@@ -342,6 +366,9 @@ void handle_piped_commands(char** left_argv, char** right_argv, char** argv,
             int status;
             tcsetpgrp(STDIN_FILENO, pid_1);
             waitpid(pid_1, &status, WUNTRACED);
+            if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGTSTP) {
+                handle_sigtstp();
+            }
             tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
             reset_current_fg_process();
         }
@@ -372,6 +399,9 @@ void handle_single_command(char** argv, bool is_background) {
             int status;
             tcsetpgrp(STDIN_FILENO, pid);
             waitpid(pid, &status, WUNTRACED);
+            if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGTSTP) {
+                handle_sigtstp();
+            }
             tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
             reset_current_fg_process();
         }
@@ -379,6 +409,7 @@ void handle_single_command(char** argv, bool is_background) {
 }
 
 void handle_command_line(char** tokens) {
+    debug_print("handle_command_line\n");
     // Check if it's a background process
     bool is_background = false;
     int i = 0;
@@ -428,27 +459,6 @@ void handle_sigint() {
     }
 }
 
-void handle_sigtstp() {
-    if (current_fg_process.pid >= 0) {
-        int value = kill(-current_fg_process.pid, SIGTSTP);
-        if (value == -1) {
-            perror("kill");
-        }
-
-        // Add to jobs list
-        struct Job job = {
-            .argv = current_fg_process.argv,
-            .is_running = false,
-            .pid = current_fg_process.pid,
-        };
-        add_job(job);
-
-        reset_current_fg_process();
-
-        printf("\n");
-    }
-}
-
 void handle_fg() {
     struct Job* most_recent_job = get_most_recent_job();
     int pid = most_recent_job->pid;
@@ -490,6 +500,18 @@ int main() {
 
     signal(SIGINT, handle_sigint);
     signal(SIGTSTP, handle_sigtstp);
+
+    // struct sigaction act;
+    // act.sa_handler = handle_sigtstp;
+    // sigemptyset(&act.sa_mask);
+    // act.sa_flags = 0;
+
+    // if (sigaction(SIGTSTP, &act, NULL) < 0) {
+    //     perror("sigaction");
+    //     return 1;
+    // }
+
+    signal(SIGTTOU, SIG_IGN);
 
     initialize_jobs_array();
     initialize_current_fg_process();
